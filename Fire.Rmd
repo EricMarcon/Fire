@@ -1,0 +1,253 @@
+---
+title: "Code pour le projet Fire"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Installation des packages si nécessaire
+InstallPackages <- function(Packages) {
+  InstallPackage <- function(Package) {
+    if (!Package %in% installed.packages()[, 1]) {
+      install.packages(Package, repos="https://cran.rstudio.com/")
+    }
+  }
+  invisible(sapply(Packages, InstallPackage))
+}
+# Packages obligatoires
+InstallPackages(c("knitr", "rmarkdown"))
+# Packages pour les calculs
+InstallPackages(c("tidyverse", "vegan", "entropart"))
+# Options de knitr
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Données
+
+Création du jeu de données : 3 espèces (sp1, sp2 et sp3), 2 parcelles (p1 et p2)
+
+```{r}
+ma_liste <- data.frame(Parcelle = c(rep("p1", 5), rep("p2", 4),  rep("p3", 3)),
+                         Espece= c(rep("sp1", 3), "sp2", "sp3", 
+                                   "sp1", rep("sp2", 6)))
+ma_liste
+```
+
+## Table de contingence
+
+Pour créer un tableau dont les lignes sont les parcelles et les colonnes les espèces, il faut d'abord regrouper les lignes et compter:
+
+```{r}
+library("tidyverse")
+ma_liste %>% 
+  group_by(Parcelle, Espece) %>% 
+  summarize(Abondance = n())
+```
+
+Ensuite, `pivot_wider()` permet d'élargir le tableau (la fonction `pivot_longer()` permet de faire le contraire, notamment pour préparer des données pour `ggplot()`). 
+Le code complet est :
+
+```{r}
+library("tidyverse")
+ma_liste %>% 
+  group_by(Parcelle, Espece) %>% 
+  # .groups ajouté pour faire disparaître l'avertissement
+  summarize(Abondance = n(), .groups = 'drop') %>% 
+  pivot_wider(names_from = Espece, values_from = Abondance, values_fill = 0) ->
+  # Tibble
+  mon_tableau
+mon_tableau
+```
+
+## Statistiques
+
+La technique consiste à compter les cases du tableau qui respectent un critère (exemple : exactement un individu pour définir un singleton).
+On teste chaque case du tableau pour le transformer en valeurs vraies ou fausses: 
+```{r}
+mon_tableau == 1
+```
+La colonne `Parcelle` pose problème parce qu'elle contient le nom de la parcelle et pas un nombre.
+La façon propre de régler le problème est de l'éliminer de tous les calculs:
+```{r}
+mon_tableau[, -1] == 1
+```
+
+Tant que les tests sont numériques et que la colonne renvoie systématiquement `FALSE`, il est plus simple de l'ignorer.
+
+On compte les cases en en faisant la somme (`TRUE` vaut 1, `FALSE` vaut 0):
+
+```{r}
+# Somme des singletons par ligne du tableau
+rowSums(mon_tableau == 1)
+```
+Le code complet est finalement :
+
+```{r}
+# Nombre d'espèces
+nb_especes <- rowSums(mon_tableau > 0)
+# Nombre de singletons
+nb_singletons <- rowSums(mon_tableau == 1)
+# Proportion
+prop_singletons <-  nb_singletons / nb_especes
+# Figure : ajouter les valeurs calculées au tableau original
+# Une colonne supplémentaire
+cbind(mon_tableau, prop_singletons) %>% 
+  ggplot(aes(x = Parcelle, y = prop_singletons)) +
+  geom_segment(aes(xend = Parcelle, yend = 0), size = 1, color = "darkgrey") +
+    geom_point(size = 3, color = "firebrick") +
+    labs(title = "Singletons", 
+         x = "Parcelle",
+         y = "Proportion de singletons")
+```
+
+## Filtrage des espèces rares
+
+Pour éliminer les espèces rares (ici, moins de 20% des effectifs d'une parcelle), il faut utiliser la même technique
+
+```{r}
+mon_tableau <= 0.2 * rowSums(mon_tableau[, -1])
+```
+Remarquer que les valeurs du test 
+```{r}
+ 0.2 * rowSums(mon_tableau[, -1])
+```
+sont recyclées par R : chaque valeur de la première ligne du tableau est comparée à 1, chaque valeur de la deuxième ligne à 0,8.
+
+Il reste à remplacer le contenu des cellules `TRUE` par 0 par une opération de multiplication: `FALSE` vaut 0 donc multiplier par `FALSE` donne 0, alors que multiplier par `TRUE` ne change rien.
+On inverse le test pour que les cellules à modifier soient `FALSE`:
+```{r}
+mon_tableau[, -1] * (mon_tableau[, -1] > 0.2 * rowSums(mon_tableau[, -1]))
+```
+La colonne des noms ne peut pas être multipliée, donc il a fallu la retirer de l'opération.
+Pour recréer le tableau complet, il faut la rajouter à la fin.
+Le code complet est donc:
+```{r}
+mon_tableau_filtre <- cbind(mon_tableau[, 1],
+                            mon_tableau[, -1] * (mon_tableau[, -1] > 0.2 * rowSums(mon_tableau[, -1])))
+mon_tableau_filtre
+```
+
+
+## Tirages
+
+Pour échantillonner les parcelles, on tire dans une loi multinomiale. 
+Pour cela, il faut d'abord calculer les probabilités des espèces dans chaque parcelle :
+
+```{r}
+# Eliminer la première colonne de mon_tableau qui contient les noms
+(mes_probabilites <- mon_tableau[, -1] / rowSums(mon_tableau[, -1]))
+```
+
+Ensuite, tirer dans la loi multinomiale avec `rmultinom()`.
+Le premier paramètre est le nombre de tirages.
+
+La fonction `apply()` permet d'appliquer `rmultinom()` à chaque ligne (`MARGIN = 1`) du tableau des probabilités, qui est le vecteur des probabilités des espèces dans chaque parcelle.
+Comme le vecteur des probabilités n'est pas le premier argument de `rmultinom()`, il faut déclarer une fonction intermédiaire sans nom (appelée "fonction lambda") pour passer les arguments correctement. Son argument unique est le contenu d'une ligne du tableau :
+```{r}
+taille_echantillon <- 300
+apply(mes_probabilites, MARGIN = 1, FUN = function(proba_especes) rmultinom(1, size = taille_echantillon, prob = proba_especes))
+```
+
+`apply()` arrange les vecteurs renvoyés par `rmultinom()` sous forme de colonnes d'une matrice.
+Pour respecter notre format d'origine, il faut la transposer.
+
+Au final :
+```{r}
+taille_echantillon <- 300
+mes_probabilites %>% 
+  apply(MARGIN = 1, FUN = function(proba_especes) rmultinom(1, size = taille_echantillon, prob = proba_especes)) %>% 
+  t() -> mes_echantillons
+mes_echantillons
+```
+
+## Espérance de la distance de Bray-Curtis
+
+La distance de Bray-Curtis entre les parcelles est calculée avec **vegan**.
+
+```{r}
+library("vegan")
+mes_dist <- vegdist(mon_tableau[, -1], method="bray")
+mes_dist
+```
+L'objet obtenu est de classe `dist`.
+C'est une demi-matrice inférieure sans diagonale, difficile à manipuler, qui peut être transformé en matrice.
+```{r}
+as.matrix(mes_dist)
+```
+
+Pour stocker les distances entre parcelles simulées, le plus simple est de créer un tableau en 3 dimensions, de classe `array`: la troisième dimension permet d'empiler les matrices de distances simulées.
+
+Les `array` se comportent comme des matrices.
+Par exemple, pour créer un tableau de 3 lignes, 3 colonnes et 2 couches:
+
+```{r}
+mon_array <- array(1:18, dim = c(3, 3, 2))
+# Première couche
+mon_array[, , 1]
+```
+Pour nos simulations, on crée un tableau de la taille du nombre de parcelles en lignes et colonnes et avec autant de couches que de simulations. 
+Le code complet est:
+```{r}
+# Nombre de simulations
+nb_simulations <- 1000
+# Taille des échantillons
+taille_echantillon <- 300
+
+# Nombre de parcelles
+nb_parcelles <- ncol(mon_tableau)-1
+# Tableau de stockage des résultats des simulations
+mes_simulations <- array(0, dim=c(nb_parcelles, nb_parcelles, nb_simulations))
+# Éliminer la première colonne de mon_tableau qui contient les noms
+mes_probabilites <- mon_tableau[, -1] / rowSums(mon_tableau[, -1])
+# Boucle de simulation
+for(i in seq_len(nb_simulations)) {
+  mes_probabilites %>% 
+    # Tirage des échantillons selon une loi multinomiale
+    apply(MARGIN = 1, FUN = function(proba_especes) rmultinom(1, size = taille_echantillon, prob = proba_especes)) %>% 
+    # Transposition pour remettre les parcelles en lignes
+    t() %>% 
+    # Calcul de la distance
+    vegdist(method="bray") %>% 
+    # Transformation en matrice
+    as.matrix() ->
+    # Stockage dans une couche du tableau
+    mes_simulations[, , i]
+}
+# Calcul des distances moyennes
+apply(mes_simulations, MARGIN = c(1, 2) , mean)
+```
+La distribution des distances simulées peut être affichée dans un graphique:
+
+```{r}
+# Distribution des distances moyennes
+tibble(d12=mes_simulations[1, 2, ], d13=mes_simulations[1, 3, ], d23=mes_simulations[2, 3, ]) %>% 
+  # Données longues pour ggplot (cf. pivot_wider plus haut)
+  pivot_longer(cols = everything()) %>% 
+  ggplot() +
+    geom_density(aes(x=value, col=name))
+```
+
+## Diversité
+
+Le package **entropart** permet de décomposer la diversité.
+Les données sont des dataframes avec les espèces en ligne, à transformer en objet `MetaCommunity`.
+
+```{r}
+# Transposition pour mettre les espèces en ligne
+mes_communautes <- t(mon_tableau[, -1])
+# Noms de colonnes = parcelles
+colnames(mes_communautes) <- mon_tableau$Parcelle
+mes_communautes
+library("entropart")
+# Creation d'une metacommunaute = un assemblage de communautés
+# Les poids sont les nombres d'individus (pour bénéficier de meilleurs estimateurs de la diversité)
+ma_metacommunaute <- MetaCommunity(mes_communautes, Weights = colSums(mes_communautes))
+# Les avertissements sont dus aux petits effectifs.
+summary(ma_metacommunaute)
+```
+
+La décomposition de la diversité est faite par la fonction `DivProfile`.
+```{r}
+DivProfile(, ma_metacommunaute) %>%  autoplot
+```
+
+Pour une décomposition hiérarchique, on peut créer une métacommunauté par montagne à partir des placettes de cette façon puis assembler les montagnes pour connaitre la diversité beta entre elles avec la fonction `MergeMC()`.
