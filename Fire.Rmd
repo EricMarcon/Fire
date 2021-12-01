@@ -23,7 +23,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Données
 
-Création du jeu de données : 3 espèces (sp1, sp2 et sp3), 2 parcelles (p1 et p2)
+Création du jeu de données : 3 espèces (sp1, sp2 et sp3), 3 parcelles (p1, p2 et p3).
 
 ```{r}
 ma_liste <- data.frame(Parcelle = c(rep("p1", 5), rep("p2", 4),  rep("p3", 3)),
