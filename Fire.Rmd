@@ -213,7 +213,7 @@ for(i in seq_len(nb_simulations)) {
     mes_simulations[, , i]
 }
 # Calcul des distances moyennes
-apply(mes_simulations, MARGIN = c(1, 2) , mean)
+(dist_bray_curtis <- apply(mes_simulations, MARGIN = c(1, 2) , mean))
 ```
 La distribution des distances simulées peut être affichée dans un graphique:
 
@@ -251,3 +251,76 @@ DivProfile(, ma_metacommunaute) %>%  autoplot
 ```
 
 Pour une décomposition hiérarchique, on peut créer une métacommunauté par montagne à partir des placettes de cette façon puis assembler les montagnes pour connaitre la diversité beta entre elles avec la fonction `MergeMC()`.
+
+# Distances environnementales
+
+Création des données : pour les trois parcelles p1 à p3, deux variables numériques v1 et v2.
+
+```{r}
+environnement <- data.frame(Parcelle = c("p1", "p2", "p3"), 
+                            v1= runif(3, min=0, max=1), 
+                            v2= runif(3, min=1000, max=5000))
+environnement
+```
+
+L'objectif est d'obtenir un tableau dont les lignes sont les paires de parcelles, les colonnes les deux variables, et les valeurs la distance entre les deux parcelles de la paire:
+
+```{r}
+nb_parcelles
+donnees_differences <- data.frame(d_Bray_Curtis=rep(0, nb_parcelles),
+                                  v1=rep(0, nb_parcelles),
+                                  v2=rep(0, nb_parcelles))
+donnees_differences
+```
+Les distances de Bray-Curtis sont dans la matrice `dist_bray_curtis`.
+Pour remplir la colonne `d_Bray_Curtis`, il faut remettre les données sous la forme d'un vecteur. La méthode efficace est :
+```{r}
+dist_bray_curtis %>% 
+  # Conversion en objet dist pour éliminer les doublons
+  as.dist %>% 
+  # Conversion en vecteur
+  as.vector() ->
+  donnees_differences$d_Bray_Curtis
+donnees_differences
+```
+
+L'ordre des paires de parcelles est (p1, p2), (p1, p3), (p2, p3) : d'abord toutes les paires contenant la première parcelle.
+
+Il reste à calculer les autres distances.
+`vegdist()` avec l'argument `method = "euclidian"` permet de produire directement les demi-matrices de distance : la distance euclidienne dans un espace à une dimension est la valeur absolue de la différence (imaginer une droite avec deux points).
+Pour la variable v1:
+```{r}
+environnement$v1 %>% 
+  vegdist(method = "euclidian") %>% 
+  as.vector()
+```
+
+Pour traiter toutes les variables en une fois, on peut appliquer le traitement à toutes les colonnes:
+```{r}
+# Retirer la première colonne du tableau qui contient les noms des parcelles
+d_v_envir <- apply(environnement[, -1], 
+      # Appliquer une fonction à chaque colonne
+      MARGIN = 2, 
+      # La fonction calcule la distance euclidienne et la place dans un vecteur
+      FUN = function(v_envir) 
+        as.vector(vegdist(v_envir, method = "euclidian")))
+d_v_envir
+```
+
+Le code complet pour mettre dans le même tableau la variable expliquée et les variables explicatives est finalement:
+```{r}
+# Création du dataframe avec la colonne de la variable expliquée 
+donnees_differences <- data.frame(
+  d_Bray_Curtis=as.vector(as.dist(dist_bray_curtis)))
+# Ajout des autres colonnes
+donnees_differences <- cbind(donnees_differences, d_v_envir)
+donnees_differences
+```
+
+Il reste à estimer le modèle:
+```{r}
+lm_distances <- lm(d_Bray_Curtis~v1+v2, data = donnees_differences)
+summary(lm_distances)
+```
+
+Avec 3 observations pour 2 variables, le modèle n'a aucun degré de liberté ici.
