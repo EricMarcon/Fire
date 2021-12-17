@@ -310,16 +310,15 @@ d_v_envir
 Le code complet pour mettre dans le même tableau la variable expliquée et les variables explicatives est finalement:
 ```{r}
 # Création du dataframe avec la colonne de la variable expliquée 
-donnees_differences <- data.frame(
-  d_Bray_Curtis=as.vector(as.dist(dist_bray_curtis)))
-# Ajout des autres colonnes
-donnees_differences <- cbind(donnees_differences, d_v_envir)
+data.frame(d_Bray_Curtis=as.vector(as.dist(dist_bray_curtis))) %>% 
+  # Ajout des autres colonnes
+  bind_cols(as.data.frame(d_v_envir)) -> donnees_differences
 donnees_differences
 ```
 
 Il reste à estimer le modèle:
 ```{r}
-lm_distances <- lm(d_Bray_Curtis~v1+v2, data = donnees_differences)
+lm_distances <- lm(d_Bray_Curtis ~ v1 + v2, data = donnees_differences)
 summary(lm_distances)
 ```
 
